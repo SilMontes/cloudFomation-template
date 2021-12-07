@@ -1,0 +1,193 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Challenge Template
+
+Parameters:
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+
+    PublicSubnetCidr:
+      Type: String
+      Default: 10.0.0.0/24
+
+    PrivateSubnetCidr:
+      Type: String
+      Default: 10.0.1.0/24
+
+    AmazonAMIID:
+      Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+      Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+Resources:
+
+  ChallengeVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: Boolean
+      EnableDnsSupport: Boolean
+    Tags: 
+      - Key: Name
+        Value: Challenge VPC
+
+## Internet Gateway
+
+  ChallengeIGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: 
+        - key: Name
+          Value: Challenge IGW
+  
+  AttacheVpcIgw:
+    Type: AWS::EC2::VPCGatewayAttachment
+    DependsOn:
+      - ChallengeIGW
+      - ChallengeVpc
+    Properties: 
+      InternetGatewayId: !Ref ChallengeIGW
+      VpcId: !Ref ChallengeVpc
+
+## Public Route Table
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    DependsOn: ChallengeVpc
+    Properties:
+      VpcId: !Ref ChallengeVpc
+      Tags:
+        - Key: Name
+          Value: Challenge Public Route Table
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: 
+      - PublicRouteTable
+      - ChallengeIGW
+    Properties:
+      GatewayId: !Ref ChallengeIGW
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId: !Ref PublicRouteTable
+
+# Public Subnet
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: ChallengeVpc
+    Properties: 
+      AvailabilityZone: !Selected
+        - 0
+        - !GetAZs
+          Ref: AWS::Region
+      CidrBlock: PublicSubnetCidr
+      Tags: 
+        - Key: Name
+          Value: Challenge Public Subnet
+
+  AssociatePublicRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: 
+      - PublicSubnet
+      - PublicRouteTable
+    Properties: 
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+# Private Subnet
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: ChallengeVpc
+    Properties: 
+      AvailabilityZone: !Selected
+        - 0
+        - !GetAZs
+          Ref: AWS::Region
+      CidrBlock: PrivateSubnetCidr
+      Tags: 
+        - Key: Name
+          Value: Challenge Private Subnet
+
+# NatGateway 
+
+  ElasticIPAddress:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: VPC
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn: 
+      - PrivateSubnet
+      - ElasticIPAddress
+    Properties: 
+      AllocationId: !Ref ElasticIPAddress.AllocationId
+      SubnetId: PrivateSubnet
+      Tags: 
+        - Key: Name
+          Value: Challenge NatGateway 
+
+
+# Private Route Table
+
+  PrivateRouteTable: 
+    Type: AWS::EC2::RouteTable
+    DependsOn: ChallengeVpc
+    Properties:
+      VpcId: !Ref ChallengeVpc
+      Tags:
+        - Key: Name
+          Value:  Challenge Private Route Table
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    DependsOn: 
+      - PrivateRouteTable
+      - NatGateway
+    Properties:
+      NatGatewayId: !Ref NatGateway
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateRouteTableAssociation:
+    Type: Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: 
+      - PrivateSubnet
+      - PrivateRouteTable
+    Properties: 
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet
+
+#Security Group to allow SSH
+
+  ChallengeSecuriTyGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: ChallengeVpc
+    Properties: 
+      GroupDescription: Allow SSH from anywhere
+      GroupName: ChallengeSG
+      VpcId: !Ref ChallengeVpc
+      SecurityGroupIngress: 
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      Tags: 
+        - Key: Name
+          Value: ChallengeSG
+        
+  
+# EC2 Instance 
+
+  ChallengeInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref AmazonAMIID
+      SubnetId: !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref ChallengeSecuriTyGroup
+      Tags:
+        - Key: Name
+          Value: Challenge Instance
